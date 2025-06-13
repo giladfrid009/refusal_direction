@@ -185,6 +185,20 @@ def run_pipeline(model_path):
     evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
     evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
 
+    # 6. Orthogonalize the weights and save the model
+    # Create directory for the orthogonalized model
+    # orthogonalized_model_dir = os.path.join(cfg.artifact_path(), "orthogonalized_model")
+    # if not os.path.exists(orthogonalized_model_dir):
+    #     os.makedirs(orthogonalized_model_dir)
+
+    # # Apply orthogonalization (model family specific implementation)
+    # orthogonalize_fn = model_base._get_orthogonalization_mod_fn(direction)  # returns function expecting `model`
+    # orthogonalize_fn(model_base.model)
+
+    # # Persist the modified weights and tokenizer in HuggingFace format
+    # model_base.model.save_pretrained(orthogonalized_model_dir)
+    # model_base.tokenizer.save_pretrained(orthogonalized_model_dir)
+
 if __name__ == "__main__":
     args = parse_arguments()
     run_pipeline(model_path=args.model_path)
