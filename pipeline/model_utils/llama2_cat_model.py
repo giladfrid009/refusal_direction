@@ -1,7 +1,7 @@
 import torch
 import functools
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
 from typing import List
 from torch import Tensor
 from jaxtyping import Int, Float
@@ -16,20 +16,20 @@ LLAMA2_DEFAULT_SYSTEM_PROMPT = """You are a helpful, respectful and honest assis
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""
 
-LLAMA2_CHAT_TEMPLATE = "[INST] {instruction} [/INST] "
+LLAMA2_CAT_CHAT_TEMPLATE = "[INST] {instruction} [/INST] "
 
-LLAMA2_CHAT_TEMPLATE_WITH_SYSTEM = "[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{instruction} [/INST] "
+LLAMA2_CAT_CHAT_TEMPLATE_WITH_SYSTEM = "[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{instruction} [/INST] "
 
-LLAMA2_REFUSAL_TOKS = [306]  # 'I'
+LLAMA2_CAT_REFUSAL_TOKS = [306, 8221]  # [I, Sorry]
 
 
 def format_instruction_llama2_chat(instruction: str, output: str = None, system: str = None, include_trailing_whitespace: bool = True):
     if system is not None:
         if system == "default":
             system = LLAMA2_DEFAULT_SYSTEM_PROMPT
-        formatted_instruction = LLAMA2_CHAT_TEMPLATE_WITH_SYSTEM.format(instruction=instruction, system_prompt=system)
+        formatted_instruction = LLAMA2_CAT_CHAT_TEMPLATE_WITH_SYSTEM.format(instruction=instruction, system_prompt=system)
     else:
-        formatted_instruction = LLAMA2_CHAT_TEMPLATE.format(instruction=instruction)
+        formatted_instruction = LLAMA2_CAT_CHAT_TEMPLATE.format(instruction=instruction)
 
     if not include_trailing_whitespace:
         formatted_instruction = formatted_instruction.rstrip()
@@ -83,20 +83,25 @@ def act_add_llama2_weights(model, direction: Float[Tensor, "d_model"], coeff, la
     model.model.layers[layer - 1].mlp.down_proj.bias = torch.nn.Parameter(bias)
 
 
-class Llama2Model(ModelBase):
+class Llama2CATModel(ModelBase):
     def _load_model(self, model_path):
         model = AutoModelForCausalLM.from_pretrained(
-            model_path,
+            "meta-llama/Llama-2-7b-chat-hf",
             torch_dtype=torch.bfloat16,
             device_map="auto",
-        ).eval()
+        )
+        
+        model.load_adapter(
+            peft_model_id="ContinuousAT/Llama-2-7B-CAT",
+            device_map="auto",
+        )
 
+        model.eval()
         model.requires_grad_(False)
-
         return model
 
     def _load_tokenizer(self, model_path):
-        tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
 
         # From: https://github.com/nrimsky/CAA/blob/main/generate_vectors.py
         tokenizer.pad_token = tokenizer.eos_token
@@ -111,10 +116,10 @@ class Llama2Model(ModelBase):
         return functools.partial(tokenize_instructions_llama2_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
-        return self.tokenizer.encode(LLAMA2_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
+        return self.tokenizer.encode(LLAMA2_CAT_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
 
     def _get_refusal_toks(self):
-        return LLAMA2_REFUSAL_TOKS
+        return LLAMA2_CAT_REFUSAL_TOKS
 
     def _get_model_block_modules(self):
         return self.model.model.layers

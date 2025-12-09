@@ -1,8 +1,7 @@
-
 import torch
 import functools
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
 from typing import List
 from torch import Tensor
 from jaxtyping import Int, Float
@@ -13,6 +12,7 @@ from pipeline.model_utils.model_base import ModelBase
 # Llama 3 chat templates are based on
 # - https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
 # <|begin_of_text|> is automatically added by the tokenizer
+
 
 LLAMA3_CHAT_TEMPLATE = """<|start_header_id|>user<|end_header_id|>
 
@@ -28,14 +28,10 @@ LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM = """<|start_header_id|>system<|end_header_id|>
 
 """
 
-LLAMA3_REFUSAL_TOKS = [40] # 'I'
+LLAMA3_REFUSAL_TOKS = [40]  # 'I'
 
-def format_instruction_llama3_chat(
-    instruction: str,
-    output: str=None,
-    system: str=None,
-    include_trailing_whitespace: bool=True
-):
+
+def format_instruction_llama3_chat(instruction: str, output: str = None, system: str = None, include_trailing_whitespace: bool = True):
     if system is not None:
         formatted_instruction = LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM.format(instruction=instruction, system_prompt=system)
     else:
@@ -49,16 +45,15 @@ def format_instruction_llama3_chat(
 
     return formatted_instruction
 
+
 def tokenize_instructions_llama3_chat(
-    tokenizer: AutoTokenizer,
-    instructions: List[str],
-    outputs: List[str]=None,
-    system: str=None,
-    include_trailing_whitespace=True
+    tokenizer: AutoTokenizer, instructions: List[str], outputs: List[str] = None, system: str = None, include_trailing_whitespace=True
 ):
     if outputs is not None:
         prompts = [
-            format_instruction_llama3_chat(instruction=instruction, output=output, system=system, include_trailing_whitespace=include_trailing_whitespace)
+            format_instruction_llama3_chat(
+                instruction=instruction, output=output, system=system, include_trailing_whitespace=include_trailing_whitespace
+            )
             for instruction, output in zip(instructions, outputs)
         ]
     else:
@@ -76,6 +71,7 @@ def tokenize_instructions_llama3_chat(
 
     return result
 
+
 def orthogonalize_llama3_weights(model, direction: Float[Tensor, "d_model"]):
     model.model.embed_tokens.weight.data = get_orthogonalized_matrix(model.model.embed_tokens.weight.data, direction)
 
@@ -83,34 +79,35 @@ def orthogonalize_llama3_weights(model, direction: Float[Tensor, "d_model"]):
         block.self_attn.o_proj.weight.data = get_orthogonalized_matrix(block.self_attn.o_proj.weight.data.T, direction).T
         block.mlp.down_proj.weight.data = get_orthogonalized_matrix(block.mlp.down_proj.weight.data.T, direction).T
 
+
 def act_add_llama3_weights(model, direction: Float[Tensor, "d_model"], coeff, layer):
-    dtype = model.model.layers[layer-1].mlp.down_proj.weight.dtype
-    device = model.model.layers[layer-1].mlp.down_proj.weight.device
+    dtype = model.model.layers[layer - 1].mlp.down_proj.weight.dtype
+    device = model.model.layers[layer - 1].mlp.down_proj.weight.device
 
     bias = (coeff * direction).to(dtype=dtype, device=device)
 
-    model.model.layers[layer-1].mlp.down_proj.bias = torch.nn.Parameter(bias)
+    model.model.layers[layer - 1].mlp.down_proj.bias = torch.nn.Parameter(bias)
+
 
 class Llama3Model(ModelBase):
-
-    def _load_model(self, model_path, dtype=torch.bfloat16):
-
+    def _load_model(self, model_path):
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
-            torch_dtype=dtype,
-            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
             device_map="auto",
         ).eval()
 
-        model.requires_grad_(False) 
+        model.requires_grad_(False)
 
         return model
 
     def _load_tokenizer(self, model_path):
         tokenizer = AutoTokenizer.from_pretrained(model_path)
-
         tokenizer.padding_side = "left"
         tokenizer.pad_token = tokenizer.eos_token
+
+        if tokenizer.pad_token is None:
+            raise ValueError("Tokenizer does not have a pad token.")
 
         return tokenizer
 
@@ -128,12 +125,12 @@ class Llama3Model(ModelBase):
 
     def _get_attn_modules(self):
         return torch.nn.ModuleList([block_module.self_attn for block_module in self.model_block_modules])
-    
+
     def _get_mlp_modules(self):
         return torch.nn.ModuleList([block_module.mlp for block_module in self.model_block_modules])
 
     def _get_orthogonalization_mod_fn(self, direction: Float[Tensor, "d_model"]):
         return functools.partial(orthogonalize_llama3_weights, direction=direction)
-    
+
     def _get_act_add_mod_fn(self, direction: Float[Tensor, "d_model"], coeff, layer):
         return functools.partial(act_add_llama3_weights, direction=direction, coeff=coeff, layer=layer)

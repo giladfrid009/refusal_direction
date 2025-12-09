@@ -136,7 +136,7 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
 def run_pipeline(model_path):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)
-    cfg = Config(model_alias=model_alias, model_path=model_path)
+    cfg = Config(model_alias=model_alias, model_path=model_path) # NOTE: we might need to change this config
 
     model_base = construct_model_base(cfg.model_path)
 
