@@ -1,13 +1,8 @@
 import torch
 import functools
 
-from torch import Tensor
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List
-from torch import Tensor
-from jaxtyping import Int, Float
-
-from pipeline.utils.utils import get_orthogonalized_matrix
 from pipeline.model_utils.model_base import ModelBase
 
 # Qwen chat templates are based on
@@ -81,23 +76,6 @@ def tokenize_instructions_qwen_chat(
     return result
 
 
-def orthogonalize_qwen_weights(model, direction: Float[Tensor, "d_model"]):
-    model.transformer.wte.weight.data = get_orthogonalized_matrix(model.transformer.wte.weight.data, direction)
-
-    for block in model.transformer.h:
-        block.attn.c_proj.weight.data = get_orthogonalized_matrix(block.attn.c_proj.weight.data.T, direction).T
-        block.mlp.c_proj.weight.data = get_orthogonalized_matrix(block.mlp.c_proj.weight.data.T, direction).T
-
-
-def act_add_qwen_weights(model, direction: Float[Tensor, "d_model"], coeff, layer):
-    dtype = model.transformer.h[layer - 1].mlp.c_proj.weight.dtype
-    device = model.transformer.h[layer - 1].mlp.c_proj.weight.device
-
-    bias = (coeff * direction).to(dtype=dtype, device=device)
-
-    model.transformer.h[layer - 1].mlp.c_proj.bias = torch.nn.Parameter(bias)
-
-
 class QwenModel(ModelBase):
     def _load_model(self, model_path, dtype=torch.float16):
         model_kwargs = {}
@@ -151,9 +129,3 @@ class QwenModel(ModelBase):
 
     def _get_mlp_modules(self):
         return torch.nn.ModuleList([block_module.mlp for block_module in self.model_block_modules])
-
-    def _get_orthogonalization_mod_fn(self, direction: Float[Tensor, "d_model"]):
-        return functools.partial(orthogonalize_qwen_weights, direction=direction)
-
-    def _get_act_add_mod_fn(self, direction: Float[Tensor, "d_model"], coeff, layer):
-        return functools.partial(act_add_qwen_weights, direction=direction, coeff=coeff, layer=layer)

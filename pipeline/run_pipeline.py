@@ -162,6 +162,8 @@ def run_pipeline(model_path):
         generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
         generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
 
+    return
+
     # 3b. Evaluate completions and save results on harmful evaluation datasets
     for dataset_name in cfg.evaluation_datasets:
         evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)

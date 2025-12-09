@@ -1,7 +1,6 @@
 from pipeline.model_utils.model_base import ModelBase
 
 
-# NOTE: refusal keywords might differ even if two models map to the same ModelBase subclass.
 def construct_model_base(model_path: str) -> ModelBase:
     
     if "meta-llama/Llama-2-7b-chat-hf" == model_path:  
