@@ -3,8 +3,14 @@ import random
 import json
 import os
 import argparse
+import logging
+import numpy as np
 
 from dataset.load_dataset import load_dataset_split, load_dataset
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 from pipeline.config import Config
 from pipeline.model_utils.model_factory import construct_model_base
@@ -27,12 +33,25 @@ def load_and_sample_datasets(cfg):
 
     Returns:
         Tuple of datasets: (harmful_train, harmless_train, harmful_val, harmless_val)
-    """
-    random.seed(42)
-    harmful_train = random.sample(load_dataset_split(harmtype='harmful', split='train', instructions_only=True), cfg.n_train)
-    harmless_train = random.sample(load_dataset_split(harmtype='harmless', split='train', instructions_only=True), cfg.n_train)
-    harmful_val = random.sample(load_dataset_split(harmtype='harmful', split='val', instructions_only=True), cfg.n_val)
-    harmless_val = random.sample(load_dataset_split(harmtype='harmless', split='val', instructions_only=True), cfg.n_val)
+    """    
+    logger.info("Loading datasets...")
+    harmful_train = load_dataset_split(harmtype='harmful', split='train', instructions_only=True)
+    harmless_train = load_dataset_split(harmtype='harmless', split='train', instructions_only=True)
+    
+    rng = np.random.default_rng()
+    num_train = min(len(harmful_train), len(harmless_train), cfg.n_train)
+    harmful_train = rng.choice(harmful_train, num_train, replace=False)
+    harmless_train = rng.choice(harmless_train, num_train, replace=False)
+    logger.info(f"Sampled {num_train} training examples (harmful and harmless)")
+
+    harmful_val = load_dataset_split(harmtype='harmful', split='val', instructions_only=True)
+    harmless_val = load_dataset_split(harmtype='harmless', split='val', instructions_only=True)
+    
+    num_val = min(len(harmful_val), len(harmless_val), cfg.n_val)
+    harmful_val = rng.choice(harmful_val, num_val, replace=False)
+    harmless_val = rng.choice(harmless_val, num_val, replace=False)
+    logger.info(f"Sampled {num_val} validation examples (harmful and harmless)")
+
     return harmful_train, harmless_train, harmful_val, harmless_val
 
 def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val):
@@ -46,21 +65,26 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         return [inst for inst, score in zip(dataset, scores.tolist()) if comparison(score, threshold)]
 
     if cfg.filter_train:
+        logger.info(f"Filtering train samples - initial harmful: {len(harmful_train)}, harmless: {len(harmless_train)}")
         harmful_train_scores = get_refusal_scores(model_base.model, harmful_train, model_base.tokenize_instructions_fn, model_base.refusal_toks)
         harmless_train_scores = get_refusal_scores(model_base.model, harmless_train, model_base.tokenize_instructions_fn, model_base.refusal_toks)
         harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
         harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
+        logger.info(f"Filtered train samples - remaining harmful: {len(harmful_train)}, harmless: {len(harmless_train)}")
 
     if cfg.filter_val:
+        logger.info(f"Filtering val samples - initial harmful: {len(harmful_val)}, harmless: {len(harmless_val)}")
         harmful_val_scores = get_refusal_scores(model_base.model, harmful_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
         harmless_val_scores = get_refusal_scores(model_base.model, harmless_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
         harmful_val = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
         harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
+        logger.info(f"Filtered val samples - remaining harmful: {len(harmful_val)}, harmless: {len(harmless_val)}")
     
     return harmful_train, harmless_train, harmful_val, harmless_val
 
 def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train):
     """Generate and save candidate directions."""
+    logger.info("Generating candidate refusal directions...")
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'generate_directions')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'generate_directions'))
 
@@ -71,11 +95,13 @@ def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harml
         artifact_dir=os.path.join(cfg.artifact_path(), "generate_directions"))
 
     torch.save(mean_diffs, os.path.join(cfg.artifact_path(), 'generate_directions/mean_diffs.pt'))
+    logger.info(f"Saved candidate directions to {cfg.artifact_path()}/generate_directions/mean_diffs.pt")
 
     return mean_diffs
 
 def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions):
     """Select and save the direction."""
+    logger.info("Selecting best refusal direction...")
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
 
@@ -87,15 +113,19 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
         artifact_dir=os.path.join(cfg.artifact_path(), "select_direction")
     )
 
+    logger.info(f"Selected direction at position {pos}, layer {layer}")
+
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
         json.dump({"pos": pos, "layer": layer}, f, indent=4)
 
     torch.save(direction, f'{cfg.artifact_path()}/direction.pt')
+    logger.info(f"Saved direction to {cfg.artifact_path()}/direction.pt")
 
     return pos, layer, direction
 
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
     """Generate and save completions for a dataset."""
+    logger.info(f"Generating completions for dataset '{dataset_name}' with intervention '{intervention_label}'...")
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'completions')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'completions'))
 
@@ -104,11 +134,14 @@ def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fw
 
     completions = model_base.generate_completions(dataset, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, max_new_tokens=cfg.max_new_tokens)
     
-    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json', "w") as f:
+    output_path = f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json'
+    with open(output_path, "w") as f:
         json.dump(completions, f, indent=4)
+    logger.info(f"Saved {len(completions)} completions to {output_path}")
 
 def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, dataset_name, eval_methodologies):
     """Evaluate completions and save results for a dataset."""
+    logger.info(f"Evaluating completions for dataset '{dataset_name}' with intervention '{intervention_label}'...")
     with open(os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json'), 'r') as f:
         completions = json.load(f)
 
@@ -118,27 +151,38 @@ def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, d
         evaluation_path=os.path.join(cfg.artifact_path(), "completions", f"{dataset_name}_{intervention_label}_evaluations.json"),
     )
 
-    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_evaluations.json', "w") as f:
+    output_path = f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_evaluations.json'
+    with open(output_path, "w") as f:
         json.dump(evaluation, f, indent=4)
+    logger.info(f"Saved evaluations to {output_path}")
 
 def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label):
     """Evaluate loss on datasets."""
+    logger.info(f"Evaluating loss for intervention '{intervention_label}'...")
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'loss_evals')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'loss_evals'))
 
-    on_distribution_completions_file_path = os.path.join(cfg.artifact_path(), f'completions/harmless_baseline_completions.json')
+    on_distribution_completions_file_path = os.path.join(cfg.artifact_path(), 'completions/harmless_baseline_completions.json')
 
     loss_evals = evaluate_loss(model_base, fwd_pre_hooks, fwd_hooks, batch_size=cfg.ce_loss_batch_size, n_batches=cfg.ce_loss_n_batches, completions_file_path=on_distribution_completions_file_path)
 
-    with open(f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json', "w") as f:
+    output_path = f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json'
+    with open(output_path, "w") as f:
         json.dump(loss_evals, f, indent=4)
+    logger.info(f"Saved loss evaluations to {output_path}")
 
 def run_pipeline(model_path):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)
-    cfg = Config(model_alias=model_alias, model_path=model_path) # NOTE: we might need to change this config
+    cfg = Config(model_alias=model_alias, model_path=model_path)
 
+    logger.info(f"Starting pipeline for model: {model_alias}")
+    logger.info(f"Model path: {model_path}")
+    logger.info(f"Artifact path: {cfg.artifact_path()}")
+
+    logger.info("Loading model...")
     model_base = construct_model_base(cfg.model_path)
+    logger.info("Model loaded successfully")
 
     # Load and sample datasets
     harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
@@ -157,20 +201,24 @@ def run_pipeline(model_path):
     actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_input_pre_hook(vector=direction, coeff=-1.0))], []
 
     # 3a. Generate and save completions on harmful evaluation datasets
+    logger.info(f"Processing {len(cfg.evaluation_datasets)} evaluation datasets: {cfg.evaluation_datasets}")
     for dataset_name in cfg.evaluation_datasets:
-        generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name)
+        # generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name)
         generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
-        generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
+        # generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
 
-    return
+    logger.info("Early exit - skipping remaining evaluation steps")
+    return # EARLY EXIT
 
     # 3b. Evaluate completions and save results on harmful evaluation datasets
+    logger.info("Evaluating completions on harmful datasets...")
     for dataset_name in cfg.evaluation_datasets:
         evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
         evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
         evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
     
     # 4a. Generate and save completions on harmless evaluation dataset
+    logger.info("Generating completions on harmless test dataset...")
     harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
     generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
@@ -179,13 +227,17 @@ def run_pipeline(model_path):
     generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
 
     # 4b. Evaluate completions and save results on harmless evaluation dataset
+    logger.info("Evaluating completions on harmless dataset...")
     evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
     evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
 
     # 5. Evaluate loss on harmless datasets
+    logger.info("Evaluating loss on harmless datasets...")
     evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
     evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
     evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
+
+    logger.info("Pipeline completed successfully")
 
 if __name__ == "__main__":
     args = parse_arguments()

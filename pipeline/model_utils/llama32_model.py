@@ -70,9 +70,6 @@ def tokenize_instructions_llama32_chat(
     return result
 
 
-
-
-
 class Llama32Model(ModelBase):
     def _load_model(self, model_path):
         model = AutoModelForCausalLM.from_pretrained(

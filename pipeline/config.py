@@ -8,12 +8,12 @@ from typing import Tuple
 class Config:
     model_alias: str
     model_path: str
-    n_train: int = 128
-    n_test: int = 100
-    n_val: int = 32
+    n_train: int = 128000
+    n_test: int = 10000
+    n_val: int = 32000
     filter_train: bool = True
     filter_val: bool = True
-    evaluation_datasets: Tuple[str] = ("jailbreakbench",)
+    evaluation_datasets: Tuple[str] = ("advbench_test", "harmbench_std_test")
     max_new_tokens: int = 512
     jailbreak_eval_methodologies: Tuple[str] = ("substring_matching", "llamaguard2")
     refusal_eval_methodologies: Tuple[str] = ("substring_matching",)

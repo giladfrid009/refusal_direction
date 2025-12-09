@@ -62,13 +62,12 @@ class ModelBase(ABC):
     def _get_act_add_mod_fn(self, direction: Float[Tensor, "d_model"], coeff: float, layer: int):
         raise NotImplementedError
 
-    def generate_completions(self, dataset, fwd_pre_hooks=[], fwd_hooks=[], batch_size=8, max_new_tokens=64):
-        generation_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=False)
+    def generate_completions(self, dataset, fwd_pre_hooks=[], fwd_hooks=[], batch_size=50, max_new_tokens=512):
+        generation_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=True)
         generation_config.pad_token_id = self.tokenizer.pad_token_id
 
         completions = []
         instructions = [x['instruction'] for x in dataset]
-        categories = [x['category'] for x in dataset]
 
         for i in tqdm(range(0, len(dataset), batch_size)):
             tokenized_instructions = self.tokenize_instructions_fn(instructions=instructions[i:i + batch_size])
@@ -78,13 +77,16 @@ class ModelBase(ABC):
                     input_ids=tokenized_instructions.input_ids.to(self.model.device),
                     attention_mask=tokenized_instructions.attention_mask.to(self.model.device),
                     generation_config=generation_config,
+                    bos_token_id=self.tokenizer.bos_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    use_model_defaults=False,
                 )
 
                 generation_toks = generation_toks[:, tokenized_instructions.input_ids.shape[-1]:]
 
                 for generation_idx, generation in enumerate(generation_toks):
                     completions.append({
-                        'category': categories[i + generation_idx],
                         'prompt': instructions[i + generation_idx],
                         'response': self.tokenizer.decode(generation, skip_special_tokens=True).strip()
                     })
